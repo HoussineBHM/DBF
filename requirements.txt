@@ -1,1 +1,8 @@
-streamlit
+# Requirements for the Odoo → ACT DBF Streamlit app
+# Python 3.9+ recommended
+
+streamlit>=1.30
+pandas>=2.1
+numpy>=1.24
+openpyxl>=3.1   # Excel .xlsx read/write
+xlrd>=2.0       # Excel .xls support (pandas uses xlrd for .xls)
