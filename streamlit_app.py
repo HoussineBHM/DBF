@@ -36,7 +36,6 @@ with st.sidebar:
     st.caption("Adjust these to your internal codes if needed.")
 
     st.header("Options")
-    opt_append = st.checkbox("Append to a previous DBF (upload below)", value=False)
     opt_keep_other_70x = st.checkbox("Keep other 70x lines (besides 700000/178000)", value=True)
 
     st.header("Sanity checks")
@@ -46,7 +45,7 @@ col1, col2 = st.columns(2)
 with col1:
     xls_file = st.file_uploader("Upload monthly Odoo Excel", type=["xlsx", "xls"])
 with col2:
-    prev_dbf_file = st.file_uploader("Upload previous DBF (optional, required if 'Append' is on)", type=["dbf"])
+    additional_xlsx = st.file_uploader("Upload an XLSX to convert to DBF", type=["xlsx", "xls"])
 
 # ---------------------------- Schema + Helpers ---------------------------------
 SCHEMA = [
@@ -497,10 +496,6 @@ if xls_file is not None:
         st.error(f"Failed to read Excel: {e}")
         st.stop()
 
-    if opt_append and prev_dbf_file is None:
-        st.warning("Upload a previous DBF to append, or uncheck 'Append'.")
-        st.stop()
-
     if st.button("🚀 Generate DBF"):
         try:
             recs, unbalanced = transform_excel(
@@ -509,17 +504,19 @@ if xls_file is not None:
                 map21=vat_map_21.strip(),
                 map00=vat_map_00.strip(),
             )
+            # Normal flow: write the converted records
+            recs_to_write = recs
 
-            # If appending to previous DBF
-            if opt_append and prev_dbf_file is not None:
-                fields_prev, df_prev = read_dbf(prev_dbf_file.read())
-                # Convert recs to DataFrame in schema order
-                df_new = pd.DataFrame([{k: r.get(k, None) for (k,_,_,_) in SCHEMA} for r in recs])
-                df_out = pd.concat([df_prev, df_new], ignore_index=True)
-                # Recreate records to write (keep schema)
-                recs_to_write = df_out.to_dict(orient="records")
-            else:
-                recs_to_write = recs
+            # If an additional XLSX was provided, convert it as a separate DBF for download
+            if additional_xlsx is not None:
+                try:
+                    xdf2 = pd.read_excel(additional_xlsx)
+                    recs2, _ = transform_excel(xdf2, keep_other_70x=opt_keep_other_70x,
+                                              map21=vat_map_21.strip(), map00=vat_map_00.strip())
+                    dbf2 = write_dbf_bytes(recs2, SCHEMA)
+                    st.download_button("⬇️ Download Converted XLSX as DBF", dbf2, file_name="converted_from_xlsx.dbf", mime="application/octet-stream")
+                except Exception as e:
+                    st.error(f"Failed to convert additional XLSX: {e}")
 
             dbf_bytes = write_dbf_bytes(recs_to_write, SCHEMA)
 
