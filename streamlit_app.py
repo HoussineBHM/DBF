@@ -69,9 +69,10 @@ SCHEMA = [
     ("AMOUNTEUR", "N", 17, 3),
     ("VATBASE", "N", 17, 3),
     ("VATCODE", "C", 6, 0),
-    ("CURRAMOUNT", "N", 17, 3),
+    # Change currency numeric fields to character so they are visibly empty in DBF viewers
+    ("CURRAMOUNT", "C", 17, 0),
     ("CURRCODE", "C", 3, 0),
-    ("CUREURBASE", "N", 17, 3),
+    ("CUREURBASE", "C", 17, 0),
     ("VATTAX", "N", 17, 3),
     ("VATIMPUT", "C", 6, 0),
     ("CURRATE", "N", 12, 5),
@@ -396,9 +397,9 @@ def transform_excel(xdf: pd.DataFrame, keep_other_70x=True, map21="211400", map0
                 "AMOUNTEUR": amount,                 # balance here
                 "VATBASE": 0.0,                      # set on 400000/TVA lines
                 "VATCODE": "",
-                "CURRAMOUNT": None,
+                "CURRAMOUNT": "",
                 "CURRCODE": "",
-                "CUREURBASE": None,
+                "CUREURBASE": "",
                 "VATTAX": 0.0,                       # set on 400000 only for non-zero VAT
                 "VATIMPUT": "",                      # set on 700000 only
                 "CURRATE": 0.0,
