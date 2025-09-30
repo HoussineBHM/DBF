@@ -532,6 +532,51 @@ def df_to_dbf_records(df: pd.DataFrame):
     return records
 
 
+def records_to_preview_df(records, schema=SCHEMA):
+    """Create a DataFrame that is a carbon-copy view of the DBF output:
+    - Columns in the exact SCHEMA order
+    - Dates as YYYYMMDD strings
+    - Numbers formatted with the number of decimals from schema
+    - Empty fields as empty strings
+    """
+    rows = []
+    for rec in records:
+        row = {}
+        for name, ftype, flen, fdec in schema:
+            val = rec.get(name, None)
+            if ftype == "C":
+                row[name] = "" if val is None else str(val)
+            elif ftype == "N":
+                if val is None:
+                    row[name] = ""
+                else:
+                    try:
+                        num = float(val)
+                    except Exception:
+                        row[name] = str(val)
+                    else:
+                        if fdec > 0:
+                            row[name] = f"{num:.{fdec}f}"
+                        else:
+                            row[name] = str(int(round(num)))
+            elif ftype == "D":
+                # DBF date stored as YYYYMMDD text; ensure string
+                s = "" if not val else str(val)
+                row[name] = s[:8]
+            elif ftype == "L":
+                if val is True:
+                    row[name] = "T"
+                elif val is False:
+                    row[name] = "F"
+                else:
+                    row[name] = ""
+            else:
+                row[name] = "" if val is None else str(val)
+        rows.append(row)
+    cols = [name for (name,_,_,_) in schema]
+    return pd.DataFrame(rows, columns=cols)
+
+
 if mode == "Transform Odoo Excel → ACT DBF":
     if xls_file is not None:
         try:
@@ -553,8 +598,8 @@ if mode == "Transform Odoo Excel → ACT DBF":
                 dbf_bytes = write_dbf_bytes(recs, SCHEMA)
                 st.success("DBF generated successfully.")
                 st.download_button("⬇️ Download DBF", dbf_bytes, file_name="export_ACT_from_Odoo.dbf", mime="application/octet-stream")
-                # preview
-                df_preview = pd.DataFrame([{k: r.get(k, None) for (k,_,_,_) in SCHEMA} for r in recs])
+                # preview (carbon-copy of DBF)
+                df_preview = records_to_preview_df(recs, SCHEMA)
                 csv_bytes = df_preview.to_csv(index=False).encode("utf-8-sig")
                 xlsx_buf = io.BytesIO()
                 with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as w:
@@ -590,8 +635,8 @@ else:
                 dbf_bytes = write_dbf_bytes(recs, SCHEMA)
                 st.success("DBF converted successfully.")
                 st.download_button("⬇️ Download Converted DBF", dbf_bytes, file_name="converted.dbf", mime="application/octet-stream")
-                # preview
-                df_preview = pd.DataFrame([{k: r.get(k, None) for (k,_,_,_) in SCHEMA} for r in recs])
+                # preview (carbon-copy of DBF)
+                df_preview = records_to_preview_df(recs, SCHEMA)
                 csv_bytes = df_preview.to_csv(index=False).encode("utf-8-sig")
                 xlsx_buf = io.BytesIO()
                 with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as w:
