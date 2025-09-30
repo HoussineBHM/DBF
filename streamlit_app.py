@@ -183,6 +183,13 @@ def write_dbf_bytes(records, schema=SCHEMA, encoding="cp1252"):
         buf.write(b" ")
         for name, ftype, flen, fdec in schema:
             val = rec.get(name, None)
+            # Force certain fields to remain empty in the DBF output
+            if name == "CURRCODE":
+                # Always write CURRCODE as empty string
+                val = ""
+            if name in ("CURRAMOUNT", "CUREURBASE"):
+                # Always write these numeric currency fields as blank (not 0)
+                val = None
             if ftype == "C":
                 s = "" if val is None else str(val)
                 b = s.encode(encoding, errors="ignore")[:flen]
@@ -389,9 +396,9 @@ def transform_excel(xdf: pd.DataFrame, keep_other_70x=True, map21="211400", map0
                 "AMOUNTEUR": amount,                 # balance here
                 "VATBASE": 0.0,                      # set on 400000/TVA lines
                 "VATCODE": "",
-                "CURRAMOUNT": 0.0,
-                "CURRCODE": "0",
-                "CUREURBASE": 0.0,
+                "CURRAMOUNT": None,
+                "CURRCODE": "",
+                "CUREURBASE": None,
                 "VATTAX": 0.0,                       # set on 400000 only for non-zero VAT
                 "VATIMPUT": "",                      # set on 700000 only
                 "CURRATE": 0.0,
