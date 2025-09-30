@@ -560,9 +560,13 @@ def records_to_preview_df(records, schema=SCHEMA):
                         else:
                             row[name] = str(int(round(num)))
             elif ftype == "D":
-                # DBF date stored as YYYYMMDD text; ensure string
+                # DBF date stored as YYYYMMDD text; present preview as DD/MM/YYYY
                 s = "" if not val else str(val)
-                row[name] = s[:8]
+                s = s[:8]
+                if len(s) == 8 and s.isdigit():
+                    row[name] = f"{s[6:8]}/{s[4:6]}/{s[0:4]}"
+                else:
+                    row[name] = s
             elif ftype == "L":
                 if val is True:
                     row[name] = "T"
