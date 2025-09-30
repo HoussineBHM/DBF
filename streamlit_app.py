@@ -41,11 +41,19 @@ with st.sidebar:
     st.header("Sanity checks")
     opt_check_balance = st.checkbox("Show unbalanced invoices", value=True)
 
-col1, col2 = st.columns(2)
-with col1:
+# Choose workflow mode: transform Odoo export or generic convert
+mode = st.radio("Choose workflow:", (
+    "Transform Odoo Excel → ACT DBF",
+    "Convert generic Excel → DBF (no transformation)"
+))
+
+# Uploaders per mode
+xls_file = None
+conv_xlsx = None
+if mode == "Transform Odoo Excel → ACT DBF":
     xls_file = st.file_uploader("Upload monthly Odoo Excel", type=["xlsx", "xls"])
-with col2:
-    additional_xlsx = st.file_uploader("Upload an XLSX to convert to DBF", type=["xlsx", "xls"])
+else:
+    conv_xlsx = st.file_uploader("Upload an Excel file to convert directly to DBF", type=["xlsx", "xls"])
 
 # ---------------------------- Schema + Helpers ---------------------------------
 SCHEMA = [
@@ -487,59 +495,110 @@ def transform_excel(xdf: pd.DataFrame, keep_other_70x=True, map21="211400", map0
     return records, unbalanced
 
 # ------------------------------- Main action -----------------------------------
-if xls_file is not None:
-    try:
-        xdf = pd.read_excel(xls_file)
-        st.success(f"Excel loaded: {xdf.shape[0]} rows, {xdf.shape[1]} columns")
-        st.dataframe(xdf.head(20))
-    except Exception as e:
-        st.error(f"Failed to read Excel: {e}")
-        st.stop()
+def df_to_dbf_records(df: pd.DataFrame):
+    """Best-effort mapping from a generic DataFrame to DBF records following SCHEMA.
+    This will try to match column names (case-insensitive) to schema field names.
+    """
+    cols = {c.lower(): c for c in df.columns}
+    records = []
+    for _, row in df.iterrows():
+        rec = {}
+        for name, ftype, flen, fdec in SCHEMA:
+            # try exact match first, then prefix match
+            src = None
+            if name.lower() in cols:
+                src = cols[name.lower()]
+            else:
+                # try shorter heuristics
+                for c in cols:
+                    if c.startswith(name.lower()) or name.lower().startswith(c[:3]):
+                        src = cols[c]
+                        break
+            val = row[src] if src is not None else None
+            if pd.isna(val):
+                val = None
+            # simple typing
+            if ftype == "C":
+                rec[name] = "" if val is None else str(val)
+            elif ftype == "N":
+                rec[name] = None if val is None else to_number(val)
+            elif ftype == "D":
+                rec[name] = yyyymmdd(val)
+            elif ftype == "L":
+                rec[name] = True if str(val).upper() in ("T","TRUE","Y","1") else (False if str(val).upper() in ("F","FALSE","N","0") else None)
+            else:
+                rec[name] = val
+        records.append(rec)
+    return records
 
-    if st.button("🚀 Generate DBF"):
+
+if mode == "Transform Odoo Excel → ACT DBF":
+    if xls_file is not None:
         try:
-            recs, unbalanced = transform_excel(
-                xdf,
-                keep_other_70x=opt_keep_other_70x,
-                map21=vat_map_21.strip(),
-                map00=vat_map_00.strip(),
-            )
-            # Normal flow: write the converted records
-            recs_to_write = recs
-
-            # If an additional XLSX was provided, convert it as a separate DBF for download
-            if additional_xlsx is not None:
-                try:
-                    xdf2 = pd.read_excel(additional_xlsx)
-                    recs2, _ = transform_excel(xdf2, keep_other_70x=opt_keep_other_70x,
-                                              map21=vat_map_21.strip(), map00=vat_map_00.strip())
-                    dbf2 = write_dbf_bytes(recs2, SCHEMA)
-                    st.download_button("⬇️ Download Converted XLSX as DBF", dbf2, file_name="converted_from_xlsx.dbf", mime="application/octet-stream")
-                except Exception as e:
-                    st.error(f"Failed to convert additional XLSX: {e}")
-
-            dbf_bytes = write_dbf_bytes(recs_to_write, SCHEMA)
-
-            st.success("DBF generated successfully.")
-            st.download_button("⬇️ Download DBF", dbf_bytes, file_name="export_ACT_from_Odoo.dbf", mime="application/octet-stream")
-
-            # Also export a CSV/Excel preview
-            df_preview = pd.DataFrame([{k: r.get(k, None) for (k,_,_,_) in SCHEMA} for r in recs_to_write])
-            csv_bytes = df_preview.to_csv(index=False).encode("utf-8-sig")
-            xlsx_buf = io.BytesIO()
-            with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as w:
-                df_preview.to_excel(w, index=False, sheet_name="ACT", freeze_panes=(1,0))
-            st.download_button("⬇️ Download Preview (CSV)", csv_bytes, file_name="preview_ACT.csv", mime="text/csv")
-            st.download_button("⬇️ Download Preview (XLSX)", xlsx_buf.getvalue(), file_name="preview_ACT.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-            if opt_check_balance:
-                if unbalanced:
-                    st.warning(f"Unbalanced invoices (sum of AMOUNTEUR ≠ 0): {len(unbalanced)}")
-                    st.dataframe(pd.DataFrame([{"DOCNUMBER":k, "SUM_AMOUNTEUR":round(v,2)} for k,v in unbalanced.items()]))
-                else:
-                    st.info("All invoices are balanced (sum AMOUNTEUR = 0).")
-
+            xdf = pd.read_excel(xls_file)
+            st.success(f"Excel loaded: {xdf.shape[0]} rows, {xdf.shape[1]} columns")
+            st.dataframe(xdf.head(20))
         except Exception as e:
-            st.error(f"Generation failed: {e}")
+            st.error(f"Failed to read Excel: {e}")
+            st.stop()
+
+        if st.button("🚀 Generate DBF (Transform)"):
+            try:
+                recs, unbalanced = transform_excel(
+                    xdf,
+                    keep_other_70x=opt_keep_other_70x,
+                    map21=vat_map_21.strip(),
+                    map00=vat_map_00.strip(),
+                )
+                dbf_bytes = write_dbf_bytes(recs, SCHEMA)
+                st.success("DBF generated successfully.")
+                st.download_button("⬇️ Download DBF", dbf_bytes, file_name="export_ACT_from_Odoo.dbf", mime="application/octet-stream")
+                # preview
+                df_preview = pd.DataFrame([{k: r.get(k, None) for (k,_,_,_) in SCHEMA} for r in recs])
+                csv_bytes = df_preview.to_csv(index=False).encode("utf-8-sig")
+                xlsx_buf = io.BytesIO()
+                with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as w:
+                    df_preview.to_excel(w, index=False, sheet_name="ACT", freeze_panes=(1,0))
+                st.download_button("⬇️ Download Preview (CSV)", csv_bytes, file_name="preview_ACT.csv", mime="text/csv")
+                st.download_button("⬇️ Download Preview (XLSX)", xlsx_buf.getvalue(), file_name="preview_ACT.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+                if opt_check_balance:
+                    if unbalanced:
+                        st.warning(f"Unbalanced invoices (sum of AMOUNTEUR ≠ 0): {len(unbalanced)}")
+                        st.dataframe(pd.DataFrame([{"DOCNUMBER":k, "SUM_AMOUNTEUR":round(v,2)} for k,v in unbalanced.items()]))
+                    else:
+                        st.info("All invoices are balanced (sum AMOUNTEUR = 0).")
+            except Exception as e:
+                st.error(f"Generation failed: {e}")
+    else:
+        st.info("Upload your monthly Odoo Excel to begin.")
+
 else:
-    st.info("Upload your monthly Odoo Excel to begin.")
+    # Generic convert mode
+    if conv_xlsx is not None:
+        try:
+            cdf = pd.read_excel(conv_xlsx)
+            st.success(f"Excel loaded: {cdf.shape[0]} rows, {cdf.shape[1]} columns")
+            st.dataframe(cdf.head(20))
+        except Exception as e:
+            st.error(f"Failed to read Excel: {e}")
+            st.stop()
+
+        if st.button("🚀 Convert Excel → DBF"):
+            try:
+                recs = df_to_dbf_records(cdf)
+                dbf_bytes = write_dbf_bytes(recs, SCHEMA)
+                st.success("DBF converted successfully.")
+                st.download_button("⬇️ Download Converted DBF", dbf_bytes, file_name="converted.dbf", mime="application/octet-stream")
+                # preview
+                df_preview = pd.DataFrame([{k: r.get(k, None) for (k,_,_,_) in SCHEMA} for r in recs])
+                csv_bytes = df_preview.to_csv(index=False).encode("utf-8-sig")
+                xlsx_buf = io.BytesIO()
+                with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as w:
+                    df_preview.to_excel(w, index=False, sheet_name="ACT", freeze_panes=(1,0))
+                st.download_button("⬇️ Download Preview (CSV)", csv_bytes, file_name="preview_converted.csv", mime="text/csv")
+                st.download_button("⬇️ Download Preview (XLSX)", xlsx_buf.getvalue(), file_name="preview_converted.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            except Exception as e:
+                st.error(f"Conversion failed: {e}")
+    else:
+        st.info("Upload an Excel file to convert to DBF.")
