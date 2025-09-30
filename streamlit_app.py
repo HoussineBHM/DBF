@@ -496,38 +496,80 @@ def transform_excel(xdf: pd.DataFrame, keep_other_70x=True, map21="211400", map0
 
 # ------------------------------- Main action -----------------------------------
 def df_to_dbf_records(df: pd.DataFrame):
-    """Best-effort mapping from a generic DataFrame to DBF records following SCHEMA.
-    This will try to match column names (case-insensitive) to schema field names.
+    """Map a generic DataFrame to records that follow the same layout and defaults
+    as the `transform_excel` flow so the produced DBF matches the Transform mode.
+    Heuristics are used to find doc number, account, partner, date and amount.
     """
-    cols = {c.lower(): c for c in df.columns}
+    # Use the same column detection heuristics as transform_excel to handle
+    # localized column names (accents, French labels)
+    cols = list(df.columns)
     records = []
     for _, row in df.iterrows():
-        rec = {}
-        for name, ftype, flen, fdec in SCHEMA:
-            # try exact match first, then prefix match
-            src = None
-            if name.lower() in cols:
-                src = cols[name.lower()]
-            else:
-                # try shorter heuristics
-                for c in cols:
-                    if c.startswith(name.lower()) or name.lower().startswith(c[:3]):
-                        src = cols[c]
-                        break
-            val = row[src] if src is not None else None
-            if pd.isna(val):
-                val = None
-            # simple typing
-            if ftype == "C":
-                rec[name] = "" if val is None else str(val)
-            elif ftype == "N":
-                rec[name] = None if val is None else to_number(val)
-            elif ftype == "D":
-                rec[name] = yyyymmdd(val)
-            elif ftype == "L":
-                rec[name] = True if str(val).upper() in ("T","TRUE","Y","1") else (False if str(val).upper() in ("F","FALSE","N","0") else None)
-            else:
-                rec[name] = val
+        # detect columns using EXPECTED_COLS via find_col
+        CNUM = find_col(cols, EXPECTED_COLS.get("num", []))
+        CACC = find_col(cols, EXPECTED_COLS.get("acc", []))
+        CPART = find_col(cols, EXPECTED_COLS.get("partner", []))
+        CDATE = find_col(cols, EXPECTED_COLS.get("date", []))
+        CINVD = find_col(cols, EXPECTED_COLS.get("inv_date", [])) or CDATE
+        CDUED = find_col(cols, EXPECTED_COLS.get("due_date", []))
+        CLABEL = find_col(cols, EXPECTED_COLS.get("label", []))
+        CDEBIT = find_col(cols, EXPECTED_COLS.get("debit", []))
+        CCRED = find_col(cols, EXPECTED_COLS.get("credit", []))
+
+        docnum = norm_docnum(row[CNUM])[:8] if CNUM and not pd.isna(row[CNUM]) else ""
+        acct = extract_account_code(row[CACC]) if CACC and not pd.isna(row[CACC]) else ""
+        partner_name = str(row[CPART]) if CPART and not pd.isna(row[CPART]) else ""
+        partner_ref = partner_code(partner_name, 10)
+        date_ = yyyymmdd(row[CDATE]) if CDATE and not pd.isna(row[CDATE]) else ""
+        datedoc = yyyymmdd(row[CINVD]) if CINVD and not pd.isna(row[CINVD]) else date_
+        duedate = yyyymmdd(row[CDUED]) if CDUED and not pd.isna(row[CDUED]) else ""
+        period = date_[4:6] if date_ else ""
+
+        # amount heuristic: same as transform_excel
+        debit = to_number(row[CDEBIT]) if CDEBIT and not pd.isna(row[CDEBIT]) else 0.0
+        credit = to_number(row[CCRED]) if CCRED and not pd.isna(row[CCRED]) else 0.0
+        amt_val = round(debit if debit else -credit, 3)
+
+        # build record with same defaults as transform.base_record
+        rec = {
+            "DOCTYPE": "3",
+            "DBKCODE": "VEN",
+            "DBKTYPE": "2",
+            "DOCNUMBER": docnum,
+            "DOCORDER": "",
+            "OPCODE": "",
+            "ACCOUNTGL": (acct or "")[:8],
+            "ACCOUNTRP": partner_ref,
+            "BOOKYEAR": "J",
+            "PERIOD": period,
+            "DATE": date_,
+            "DATEDOC": datedoc,
+            "DUEDATE": duedate,
+            "COMMENT": (partner_name[:40] if partner_name else (str(row[CLABEL])[:40] if CLABEL and not pd.isna(row[CLABEL]) else "")),
+            "COMMENTEXT": "",
+            "AMOUNT": 0.0,
+            "AMOUNTEUR": amt_val,
+            "VATBASE": 0.0,
+            "VATCODE": "",
+            "CURRAMOUNT": "",
+            "CURRCODE": "",
+            "CUREURBASE": "",
+            "VATTAX": 0.0,
+            "VATIMPUT": "",
+            "CURRATE": 0.0,
+            "REMINDLEV": 0,
+            "MATCHNO": "",
+            "OLDDATE": "",
+            "ISMATCHED": "F",
+            "ISLOCKED": "F",
+            "ISIMPORTED": "F",
+            "ISPOSITIVE": "T",
+            "ISTEMP": "F",
+            "MEMOTYPE": "",
+            "ISDOC": "?",
+            "DOCSTATUS": "",
+            "DICFROM": "",
+        }
         records.append(rec)
     return records
 
